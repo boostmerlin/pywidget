@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<link rel="shortcut icon" href="/favicon.ico" />
+<link rel="bookmark" href="/favicon.ico"/>
+<title>heart</title>
+<meta charset="UTF-8">
+<style type="text/css">
+html, body {
+  height: 100%;
+  background: #202a39;
+}
+.withLove {
+	overflow: hidden;
+	text-align: center;
+	padding-bottom: 2em;
+	cursor: default;
+	color: #616c84;
+}
+ @media screen and (min-width: 900px) {
+.withLove {
+	margin-top: 125px;
+}
+}
+.withLove * {
+	display: inline-block;
+}
+.withLove .alpha, .withLove .omega {
+	width: 40%;
+}
+.withLove .alpha {
+	text-align: right;
+}
+.withLove .omega {
+	text-align: left;
+}
+.withLove .heart {
+	margin: 0 -2px;
+	position: relative;
+	z-index: 3;
+	-webkit-animation: throb 1.33s ease-in-out infinite;
+	animation: throb 1.33s ease-in-out infinite;
+}
+.withLove .heart path {
+	fill: #ff005d;
+}
+ @media screen and (min-width: 300px) {
+.withLove .heart {
+	width: 30px;
+	height: 30px;
+	top: .66em;
+}
+}
+@media screen and (min-width: 460px) {
+.withLove .heart {
+	top: .8em;
+	width: 50px;
+	height: 50px;
+}
+}
+ @-webkit-keyframes throb {
+ 0% {
+ -webkit-transform: scale(1);
+}
+ 50% {
+ -webkit-transform: scale(0.8);
+}
+ 100% {
+ -webkit-transform: scale(1);
+}
+}
+ @keyframes throb {
+ 0% {
+ transform: scale(1);
+}
+ 50% {
+ transform: scale(0.8);
+}
+ 100% {
+ transform: scale(1);
+}
+}
+</style>
+</head>
+<body>
+<div class="withLove"> <span data-scroll-reveal-initialized="true" style="-webkit-transform: translatex(0);transform: translatex(0);opacity: 1;-webkit-transition: -webkit-transform 1s ease-in-out 0s,  opacity 1s ease-in-out 0s;transition: transform 1s ease-in-out 0s, opacity 1s ease-in-out 0s;-webkit-perspective: 1000;-webkit-backface-visibility: hidden;" data-scroll-reveal-id="53" class="alpha" data-scroll-reveal="move 50px enter left over 1s no reset">My CGI</span>
+ <svg class="heart" version="1.1" xmlns="http://www.w3.org/2000/svg" xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="92.515px" height="73.161px" viewBox="0 0 92.515 73.161" enable-background="new 0 0 92.515 73.161" xml:space="preserve">
+  <g>
+    <path d="M82.32,7.888c-8.359-7.671-21.91-7.671-30.271,0l-5.676,5.21l-5.678-5.21c-8.357-7.671-21.91-7.671-30.27,0          c-9.404,8.631-9.404,22.624,0,31.255l35.947,32.991L82.32,39.144C91.724,30.512,91.724,16.52,82.32,7.888z" fill="#010101"></path>
+  </g>
+  </svg>
+   <span data-scroll-reveal-initialized="true" style="-webkit-transform: translatex(0);transform: translatex(0);opacity: 1;-webkit-transition: -webkit-transform 1s ease-in-out 0s,  opacity 1s ease-in-out 0s;transition: transform 1s ease-in-out 0s, opacity 1s ease-in-out 0s;-webkit-perspective: 1000;-webkit-backface-visibility: hidden;" data-scroll-reveal-id="54" class="omega" data-scroll-reveal="move 50px enter right over 1s no reset">demo</span> </div>
+  <div class="withLove">
+          <form action="color.py?index.html" method="POST">
+             enter a color: <input type="text" name="color">
+             <input type="submit">
+         </form>
+  </div>
+</body>
+</html>
