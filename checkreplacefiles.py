@@ -64,7 +64,7 @@ def find_and_replace(srcdir, destdir):
         for name in dirs:
             if name in srcdirpkgs:
                 assetdir = os.path.join(root, name)
-                print(" 〼〼〼〼〼find assetdir:", name)
+                print("<d><d><d><d> find assetdir:", name)
                 #backup.append(assetdir)
                 #shutil.rmtree(assetdir)
                 if not dry_run:
@@ -74,7 +74,7 @@ def find_and_replace(srcdir, destdir):
         for name in files:
             if name in srcdirpkgs:
                 assetfile = os.path.join(root, name)
-                print("◇◇◇◇◇find assetfile:", name)
+                print("[f][f][f][f] find assetfile:", name)
                 # os.remove(assetfile)
                 if not dry_run:
                     print("copy asset from:", srcdirpkgs[name], "to:", assetfile)
