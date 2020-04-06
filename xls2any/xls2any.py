@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-# TODO: support json, xml
+# TODO: support xml, yml, ruby, js
 
 import os
 import sys
@@ -8,17 +8,19 @@ import argparse
 import time
 import datetime
 import xlrd
+import pprint
 
 # if sys.version_info.major == 2:
 #     reload(sys)
 #     sys.setdefaultencoding("utf-8")
 
-_EMPTY = u""
+_EMPTY = ""
+INDENT_NUMBER = 2
 
 class AnyException(Exception):
     pass
 
-def _unicode_anyway(text):
+def try_decode(text):
     try:
         unicode
         return text.decode("utf-8") if isinstance(text, str) else text
@@ -27,6 +29,13 @@ def _unicode_anyway(text):
     except UnicodeDecodeError:
         return text.decode("gb2312") if isinstance(text, str) else text
 
+def identity(v1, v2):
+    return id(v1) == id(v2)
+
+def _quote_key(key):
+    if key.startswith('"') and key.endswith('"'):
+        return key
+    return '"%s"' % key
 
 class _TargetConverter(object):
     def __init__(self, parentConverter):
@@ -36,13 +45,26 @@ class _TargetConverter(object):
         return "----file signature----"
     
     def convert_sheet(self, sheet_desc):
-        self.converter.append_line("implement me please.")
+        data = self._rinse_data(sheet_desc)
+        if sheet_desc.has_key:
+            self.generate_map(sheet_desc, data)
+        else:
+            self.generate_array(sheet_desc, data)
     
+    def on_convert_over(self, action, name):
+        pass
+
     def before_save(self):
         self.converter.append_line("do any final modification here.")
 
     def null(self):
         return _EMPTY
+
+    def generate_array(self, sheet_desc, array_data):
+        self.converter.append_line("implement generate_array method")
+
+    def generate_map(self, sheet_desc, map_data):
+        self.converter.append_line("implement generate_map method")
 
     def _cell_coord_of_merged(self, sheet, row, col):
         rlo, clo = self.converter.cell_merged_to(sheet, row, col)
@@ -63,13 +85,13 @@ class _TargetConverter(object):
             row_list = list()
             for col in range(0, row_len):
                 cd = sheet_desc.find_column_desc(col)
+                row, col = self._cell_coord_of_merged(sheet, row, col)
                 if cd:
-                    row, col = self._cell_coord_of_merged(sheet, row, col)
                     v = self.converter.get_cell_text(sheet, row, cd, col)
                     row_list.append(v)
                 else:
                     cell = sheet.cell(row, col)
-                    row_list.append(self.converter._get_cell_raw(cell))
+                    row_list.append(self.converter.get_cell_value(cell))
             if len(row_list) > 0:
                 data.append(row_list)
         return data
@@ -86,6 +108,11 @@ class _TargetConverter(object):
                     sheet, row, column_desc, col)
                 )
             return ret
+
+    def _last_flag(self, node_list):
+        if not node_list or len(node_list) == 0:
+            return
+        node_list[-1]['last'] = True
 
     def _rinse_hierachy_data(self, sheet_desc):
         sheet = self.converter.get_workbook().sheet_by_name(sheet_desc.sheet_name)
@@ -110,7 +137,7 @@ class _TargetConverter(object):
                 if child == None:
                     child = list()
                     comment = key_desc.column_name
-                    node.append({"k": field_value, "v": child, "c": comment})
+                    node.append({"k": field_value, "v": child, "c": comment, 'last': False})
                 node = child
             for column_desc in sheet_desc.columns:
                 if not column_desc.is_key:
@@ -118,8 +145,9 @@ class _TargetConverter(object):
                     field_value = row_content[field_name]
                     comment = column_desc.column_name
                     node.append(
-                        {"k": field_name, "v": field_value, "c": comment}
+                        {"k": field_name, "v": field_value, "c": comment, 'last': False}
                     )
+            self._last_flag(node)
         return data
 
     # clean xlsx data
@@ -130,6 +158,13 @@ class _TargetConverter(object):
             return self._rinse_array_data(sheet_desc)
 
 class _JsonConverter(_TargetConverter):
+    BEGIN_ARRAY = "["
+    END_ARRAY = "]"
+    BEGIN_OBJECT = "{"
+    END_OBJECT = "}"
+    NAME_SEPARATOR = ":"
+    VALUE_SEPARATOR = ","
+
     def __init__(self, parentConverter):
         super(_JsonConverter, self).__init__(parentConverter)
     
@@ -139,11 +174,85 @@ class _JsonConverter(_TargetConverter):
     def null(self):
         return "null"
 
-    def convert_sheet(self, sheet_desc):
-        pass
+    def generate_array(self, sheet_desc, root):
+        table_var = _quote_key(sheet_desc.table_name)
+        self.converter.append_line(table_var + self.NAME_SEPARATOR + " " + self.BEGIN_ARRAY)
+        for row in root:
+            line_code = self.converter.indent if len(row) <= 1 else self.converter.indent + self.BEGIN_ARRAY
+            cell_idx = 1
+            for cell in row:
+                if cell_idx != 1:
+                    line_code += self.VALUE_SEPARATOR + " "
+                line_code += cell
+                cell_idx += 1
+            line_code += _EMPTY if len(row) <= 1 else self.END_ARRAY
+            if not identity(row, root[-1]):
+                line_code += self.VALUE_SEPARATOR
+            self.converter.append_line(line_code)
+            
+        self.converter.append_line(self.END_ARRAY)
+
+    def generate_map(self, sheet_desc, root):
+        table_var = sheet_desc.table_name
+        self._gen_tree_code(sheet_desc, root, 0, len(root)==1, table_var)
+
+    def _format_node(self, node):
+        if type(node) == list:
+            ret = self.BEGIN_ARRAY
+            for v in node:
+                ret += v + self.VALUE_SEPARATOR
+            ret += self.BEGIN_ARRAY
+            return ret
+        else:
+            return node
+
+    def _gen_tree_code(self, sheet_desc, node, step, last_one, key_name):
+        key_name = _quote_key(key_name)
+        if step >= len(sheet_desc.keys):
+            if sheet_desc.simple_map and len(node) == 1:
+                child = node[0]
+                line = self.converter.indent * step + \
+                    key_name + self.NAME_SEPARATOR + child["v"]
+                line += self.VALUE_SEPARATOR
+                self.converter.append_line(line)
+                return
+            line = self.converter.indent * step + key_name + self.NAME_SEPARATOR + self.BEGIN_OBJECT
+            first_item = True
+            for kv in node:
+                key = kv["k"]
+                if not first_item:
+                    line += self.VALUE_SEPARATOR + " "
+                line += "%s%s%s" % (_quote_key(key), self.NAME_SEPARATOR, self._format_node(kv["v"]))
+                first_item = False
+            line += self.END_OBJECT if last_one else self.END_OBJECT + self.VALUE_SEPARATOR
+            self.converter.append_line(line)
+            return
+
+        self.converter.append_line(
+            self.converter.indent * step + key_name + self.NAME_SEPARATOR, False
+        )
+        self.converter.append_line(self.BEGIN_OBJECT)
+        for kv in node:
+            self._gen_tree_code(sheet_desc, kv["v"], step + 1, identity(kv, node[-1]), "%s" % kv["k"])
+        self.converter.append_line(
+            self.converter.indent * step + self.END_OBJECT +
+            (_EMPTY if step == 0 or last_one else self.VALUE_SEPARATOR)
+        )
 
     def before_save(self):
-        pass
+        self.converter.indent_all_lines()
+        self.converter.insert_line(self.BEGIN_OBJECT)
+        line  = self.converter.get_line(-1)
+        line = line.replace(self.VALUE_SEPARATOR, "")
+        self.converter.set_line(-1, line)
+        self.converter.append_line(self.END_OBJECT, False)
+    
+    def on_convert_over(self, action, name):
+        if action == Converter.SHEET_OVER:
+            line  = self.converter.get_line(-1)
+            line = line.replace(self.END_OBJECT, self.END_OBJECT+self.VALUE_SEPARATOR)
+            line = line.replace(self.END_ARRAY, self.END_ARRAY+self.VALUE_SEPARATOR)
+            self.converter.set_line(-1, line)
 
 class _LuaConverter(_TargetConverter):
     def __init__(self, parentConverter):
@@ -153,57 +262,49 @@ class _LuaConverter(_TargetConverter):
         return "nil"
 
     def get_signature(self):
-        desc = u"The Code is auto generated by xls2any, DO NOT EDIT."
+        desc = "The Code is auto generated by xls2any, DO NOT EDIT."
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        return u"--%s\n--TIME: %s\n" % (desc, now)
-
-    def convert_sheet(self, sheet_desc):
-        data = self._rinse_data(sheet_desc)
-        if sheet_desc.has_key:
-            self._gen_table_code(sheet_desc, data)
-        else:
-            self._gen_array_code(sheet_desc, data)
+        return "--%s\n--TIME: %s\n" % (desc, now)
 
     def before_save(self):
         line = _EMPTY
-        if self.converter.scope == u"local":
+        if self.converter.scope == "local":
             for table_name in self.converter.tables:
                 if line == _EMPTY:
-                    line += u"return %s" % table_name
+                    line += "return %s" % table_name
                 else:
-                    line += u", %s" % table_name
-            line += u"\n"
+                    line += ", %s" % table_name
         self.converter.append_line(line)
 
     # private function
-    def _gen_array_code(self, sheet_desc, root):
+    def generate_array(self, sheet_desc, root):
         self.converter.append_line(
-            u"--%s: %s\n" % (self.converter.xls_filename, sheet_desc.sheet_name))
-        table_var = self._scope_variable(sheet_desc.table_name)
-        self.converter.append_line(table_var + u" = ")
-        self.converter.append_line(u"{\n")
+            "--%s: %s" % (self.converter.xls_filename, sheet_desc.sheet_name))
+        table_var = sheet_desc.table_name
+        self.converter.append_line(table_var + " = ", False)
+        self.converter.append_line("{")
         for row in root:
-            line_code = self.converter.indent if len(row) <= 1 else self.converter.indent + u"{"
+            line_code = self.converter.indent if len(row) <= 1 else self.converter.indent + "{"
             cell_idx = 1
             for cell in row:
                 if cell_idx != 1:
-                    line_code += u", "
+                    line_code += ", "
                 line_code += cell
                 cell_idx += 1
-            line_code += u",\n" if len(row) <= 1 else u"},\n"
+            line_code += "," if len(row) <= 1 else "},"
             self.converter.append_line(line_code)
-        self.converter.append_line(u"}\n")
-        self.converter.append_line(u"\n")
+        self.converter.append_line("}")
+        self.converter.append_line("")
 
-    def _gen_table_code(self, sheet_desc, root):
-        comment = u"%s: %s" % (
+    def generate_map(self, sheet_desc, root):
+        comment = "%s: %s" % (
             self.converter.xls_filename, sheet_desc.sheet_name)
         table_var = self._scope_variable(sheet_desc.table_name)
         self._gen_tree_code(sheet_desc, root, 0, table_var, comment)
-        self.converter.append_line(u"\n")
+        self.converter.append_line()
 
     def _scope_variable(self, variable_name):
-        table_var = u"%s%s" % (self.converter.scope == u"local" and u"local " or 
+        table_var = "%s%s" % (self.converter.scope == "local" and "local " or 
                             self.converter.scope == "global" and "_G." or 
                             _EMPTY, variable_name)
         return table_var
@@ -221,53 +322,53 @@ class _LuaConverter(_TargetConverter):
     def _gen_tree_code(self, sheet_desc, node, step, key_name, comment):
         if comment != None:
             self.converter.append_line(
-                self.converter.indent * step + u"--" + comment + u"\n")
+                self.converter.indent * step + "--" + comment)
 
         if step >= len(sheet_desc.keys):
             if sheet_desc.simple_map and len(node) == 1:
                 child = node[0]
                 line = self.converter.indent * step + \
-                    key_name + u" = " + child["v"]
+                    key_name + " = " + child["v"]
                 if comment != None:
-                    line += u", --%s\n" % child["c"]
+                    line += ", --%s" % child["c"]
                 else:
-                    line += u",\n"
+                    line += ","
                 self.converter.append_line(line)
                 return
-            line = self.converter.indent * step + key_name + u" = {"
+            line = self.converter.indent * step + key_name + " = {"
             first_item = True
             for kv in node:
                 lua_name = kv["k"]
                 if not first_item:
-                    line += u", "
-                line += u"%s=%s" % (lua_name, self._format_node(kv["v"]))
+                    line += ", "
+                line += "%s=%s" % (lua_name, self._format_node(kv["v"]))
                 first_item = False
-            line += u"},\n"
+            line += "},"
             self.converter.append_line(line)
             return
 
         self.converter.append_line(
-            self.converter.indent * step + key_name + u" =\n")
-        self.converter.append_line(self.converter.indent * step + u"{\n")
+            self.converter.indent * step + key_name + " =")
+        self.converter.append_line(self.converter.indent * step + "{")
         firstNode = True
         for kv in node:
             comment = kv["c"] if firstNode else None
             self._gen_tree_code(
-                sheet_desc, kv["v"], step + 1, u"[%s]" % kv["k"], comment)
+                sheet_desc, kv["v"], step + 1, "[%s]" % kv["k"], comment)
             firstNode = False
         self.converter.append_line(
-            self.converter.indent * step + u"}" + (_EMPTY if step == 0 else u",") + u"\n")
+            self.converter.indent * step + "}" + (_EMPTY if step == 0 else ","))
 
 class _ColumnDesc(object):
     def __init__(self, column_name, field_name, column_idx):
         first_char = field_name[0]
         last_char = field_name[-1]
-        map_table = {u"?": "bool", u"#": "number", u"$": "string"}
-        field_name = field_name if first_char != u"*" else field_name[1:]
+        map_table = {"?": "bool", "#": "number", "$": "string"}
+        field_name = field_name if first_char != "*" else field_name[1:]
         field_name = field_name if last_char not in map_table else field_name[:-1]
         self.column_name = column_name
         self.column_indexs = column_idx
-        self.is_key = first_char == u"*"
+        self.is_key = first_char == "*"
         self.field_name = field_name
         self.map_type = map_table[last_char] if last_char in map_table else "raw"
 
@@ -329,16 +430,16 @@ class _SheetDesc(object):
 
 class Converter(object):
     scope = None
-    indent = u"\t"
+    INTENT = chr(32)
     tables = None
     FILE_OVER = 2
     SHEET_OVER = 1
     SUPPORTED_LANGUAGE = {"lua": _LuaConverter, 'json': _JsonConverter}
-    VIRTUAL_KEYS = (u"VK_INT",)
+    VIRTUAL_KEYS = ("VK_INT",)
 
     @staticmethod
     def to_bool(text):
-        falses = [_EMPTY, u"nil", u"0", u"false", u"no", u"none", u"否", u"无", u"null"]
+        falses = [_EMPTY, "nil", "0", "false", "no", "none", u"否", u"无", "null"]
         if not text or text.lower() in falses:
             return False
         return True
@@ -380,7 +481,7 @@ class Converter(object):
         if target not in self.SUPPORTED_LANGUAGE:
             raise AnyException("Unsupported language: %s" % target)
         self.scope = args.scope
-        self.indent = args.indent == 0 and u"\t" or u" " * args.indent
+        self.indent = not args.indent and self.INTENT * INDENT_NUMBER or self.INTENT * args.indent
         self._meta = args.meta
         self._header_mode = args.header_mode
         self._targetConverter = self.SUPPORTED_LANGUAGE[target](self)
@@ -400,7 +501,6 @@ class Converter(object):
 
     def convert(self, xls_filename, on_convert_over_callback=None, dry_run=False):
         self._meta_tables = list()
-        xls_filename = _unicode_anyway(xls_filename)
         try:
             self._workbook = xlrd.open_workbook(xls_filename)
             self._xls_filetime = os.path.getmtime(xls_filename)
@@ -422,14 +522,35 @@ class Converter(object):
         for sheet_desc in self._meta_tables:
             self._targetConverter.convert_sheet(sheet_desc)
             self.tables.append(sheet_desc.table_name)
+            print("process sheet: [%s] over" % sheet_desc.sheet_name)
+            self._targetConverter.on_convert_over(self.SHEET_OVER, sheet_desc.table_name)
             if callable(on_convert_over_callback):
                 on_convert_over_callback(
                     self, self.SHEET_OVER, sheet_desc.table_name)
+        print("process file: [%s] over" % xls_filename)
+        self._targetConverter.on_convert_over(self.FILE_OVER, xls_filename)
         if callable(on_convert_over_callback):
             on_convert_over_callback(self, self.FILE_OVER, xls_filename)
 
-    def append_line(self, line):
-        self._lines.append(line)
+    def append_line(self, line = _EMPTY, line_break=True):
+        self._lines.append(line_break and "%s%s" % (line, "\n") or line)
+    
+    def insert_line(self, line = _EMPTY, line_break=True):
+        self._lines.insert(0, line_break and "%s%s" % (line, "\n") or line)
+
+    def indent_all_lines(self):
+        for i in range(0, len(self._lines)):
+            self._lines[i] = self.indent + self._lines[i]
+    
+    def get_line(self, at):
+        if at >= len(self._lines) or len(self._lines)+at >= len(self._lines):
+            raise AnyException("get_line index error")
+        return self._lines[at]
+    
+    def set_line(self, at, line):
+        if at >= len(self._lines) or len(self._lines)+at >= len(self._lines):
+            raise AnyException("set_line index error")
+        self._lines[at] = line
 
     def get_meta_table(self):
         return self._meta_tables
@@ -445,8 +566,9 @@ class Converter(object):
 
     def reset(self):
         self._lines = list()
-        self._lines.append(self._targetConverter.get_signature())
-        self._lines.append(u"\n")
+        signature = self._targetConverter.get_signature()
+        if signature:
+            self._lines.append(self._targetConverter.get_signature())
         self.tables = list()
 
     # meta_tables: list of _SheetDesc
@@ -459,7 +581,7 @@ class Converter(object):
         if not text or text == _EMPTY:
             return
 
-        text_split = text.split("=")
+        text_split = [x.strip() for x in text.split("=")]
         sheet_name = text_split[0]
         table_name = text_split[1]
         if sheet_name not in self._sheet_names:
@@ -512,7 +634,7 @@ class Converter(object):
         row = self.start_row
         for col in range(0, data_sheet.ncols):
             cell = self.merged_cell(data_sheet, row, col)
-            column_header = self._get_cell_raw(cell)
+            column_header = self.get_cell_value(cell)
             if not column_header:
                 continue
             if column_header in column_headers:
@@ -541,36 +663,30 @@ class Converter(object):
                     "Meta data error, too many keys for columns, sheet: %s" % sheet_name
                 )
 
-    # 该函数尽可能返回xls看上去的字面值
-    def _get_cell_raw(self, cell):
-        if cell.ctype == xlrd.XL_CELL_TEXT:
-            return cell.value
-        if cell.ctype == xlrd.XL_CELL_NUMBER:
-            return str(cell.value).rstrip("0").rstrip(".")
-        if cell.ctype == xlrd.XL_CELL_DATE:
-            dt = xlrd.xldate.xldate_as_datetime(
-                cell.value, self._workbook.datemode)
-            return u"%s" % dt
-        if cell.ctype == xlrd.XL_CELL_BOOLEAN:
-            b = True if cell.value else False
-            return self._bool_string(b)
-        return _EMPTY
-
     def _get_cell_string(self, cell):
-        return u'"%s"' % self._get_cell_raw(cell)
+        return _quote_key(self.get_cell_value(cell))
 
     def _get_cell_number(self, cell):
-        if cell.ctype == xlrd.XL_CELL_TEXT:
-            return cell.value
+        raw = self._get_cell_raw(cell)
+        try:
+            float(raw)
+        except ValueError:
+            raise AnyException("{} is not numberic".format(raw))
+
+        return raw
+    
+    def _get_cell_raw(self, cell):
         if cell.ctype == xlrd.XL_CELL_NUMBER:
             return str(cell.value).rstrip("0").rstrip(".")
         if cell.ctype == xlrd.XL_CELL_DATE:
             dt = xlrd.xldate.xldate_as_datetime(
                 cell.value, self._workbook.datemode)
-            return u"%d" % time.mktime(dt.timetuple())
-        if cell.ctype == xlrd.XL_CELL_BOOLEAN:
-            return u"1" if cell.value else u"0"
-        return u"0"
+            return "%d" % time.mktime(dt.timetuple())
+        return try_decode(cell.value)
+
+    # 该函数尽可能返回xls看上去的字面值
+    def get_cell_value(self, cell):
+        return self._get_cell_raw(cell)
 
     def _bool_string(self, bool_value):
         formater = self.bool_formater.get('bool')
@@ -580,7 +696,7 @@ class Converter(object):
             return self._default_bool_text(bool_value)
 
     def _get_cell_bool(self, cell):
-        text = self._get_cell_raw(cell)
+        text = self.get_cell_value(cell)
         b = self.to_bool(text)
         return self._bool_string(b)
     
@@ -599,7 +715,7 @@ class Converter(object):
             return self._get_cell_bool(cell)
         if column_desc.map_type == "string":
             return self._get_cell_string(cell)
-        text = self._get_cell_raw(cell)
+        text = self.get_cell_value(cell)
         return text if text != _EMPTY else self.default_null()
 
 def _parse_argument():
@@ -608,7 +724,7 @@ def _parse_argument():
     parser.add_argument("-s", "--scope", dest="scope",
                         help="table scope,local,global", choices=["local", "global", "default"])
     parser.add_argument("-i", "--indent", dest="indent",
-                        help="indent size, 0 for tab, default 4 (spaces)", type=int, default=4, choices=[0, 2, 4, 8])
+                        help="indent size, 0 for tab, default 2 (spaces)", type=int, default=INDENT_NUMBER, choices=[0, 2, 4, 8])
     parser.add_argument("-m", "--meta", dest="meta",
                         help="meta sheet name, default 'xls2any'", default="xls2any")
     parser.add_argument("-f", "--force", dest="force",
@@ -621,8 +737,8 @@ def _parse_argument():
                         help="specify a file name, if not, convert into multiple files according to meta table.")
     parser.add_argument("-d", "--dir", dest="outdir", default=".",
                         help="output dir, default is current where converter is.")
-    parser.add_argument("-t", "--target", dest="target", default="lua",
-                        help="target language file ext", choices=["lua", "json"])
+    parser.add_argument("-t", "--target", dest="target", default="json",
+                        help="target language file ext", choices=["json", "lua"])
     parser.add_argument('inputs', nargs='+', help="input excel files")
     args = parser.parse_args()
     return args
@@ -659,7 +775,7 @@ def convert_by_each_sheet(converter, args):
                 converter.convert(filename, on_convert_over_callback)
 
 def on_convert_over_callback(converter, action, name):
-    if action == Converter.SHEET_OVER and not output_into_one:
+    if action == Converter.SHEET_OVER:
         converter.save(os.path.join(args.outdir, name))
         print("Convert a sheet into [%s.%s] over" %
                 (name, converter.target))

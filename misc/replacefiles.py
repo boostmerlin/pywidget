@@ -3,7 +3,7 @@
 #author： merlin
 #find and replace baseon file or directory name.
 #Usage:
-#python checkreplacefiles.py [--dryrun] [srcdir] destdir
+#python replacefiles.py [--dryrun] [srcdir] destdir
 #如果目录下有pkg文件，则目录下的每个文件和文件夹是一个资源单位(pkg)，作为查找和拷贝的最小单位
 #否则: 将在子目录下进行查找
 #如果不匹配destdir，即destdir中没有这个pkg，不作拷贝替换
@@ -11,6 +11,8 @@
 import os
 import sys
 import shutil
+
+PKG = "__pkg__"
 
 def copy(src, dst, root=None, exts: list=None):
     relpath = None
@@ -47,12 +49,12 @@ dry_run = False
 def find_and_replace(srcdir, destdir):
     srcdirpkgs = {}
     for root, dirs, files in os.walk(srcdir, topdown=True):
-        if not os.path.isfile(os.path.join(root, "pkg")):
+        if not os.path.isfile(os.path.join(root, PKG)):
             continue
         for name in dirs:
             srcdirpkgs[name] = os.path.join(root, name)
         for name in files:
-            if name == __file__ or name == "pkg":
+            if name == __file__ or name == PKG:
                 continue
             srcdirpkgs[name] = os.path.join(root, name)
 
