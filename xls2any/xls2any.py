@@ -8,7 +8,6 @@ import argparse
 import time
 import datetime
 import xlrd
-import pprint
 
 # if sys.version_info.major == 2:
 #     reload(sys)
@@ -16,6 +15,9 @@ import pprint
 
 _EMPTY = ""
 INDENT_NUMBER = 2
+
+def log(obj):
+    print(obj)
 
 class AnyException(Exception):
     pass
@@ -79,28 +81,32 @@ class _TargetConverter(object):
         row_start = self.converter.start_row
         if len(sheet_desc.columns) > 0:
             row_start += 1
-        
         for row in range(row_start, sheet.nrows):
             row_len = sheet.row_len(row)
             row_list = list()
             for col in range(0, row_len):
                 cd = sheet_desc.find_column_desc(col)
-                row, col = self._cell_coord_of_merged(sheet, row, col)
+                s_row, s_col = self._cell_coord_of_merged(sheet, row, col)
                 if cd:
-                    v = self.converter.get_cell_text(sheet, row, cd, col)
+                    v = self.converter.get_cell_text(sheet, s_row, cd, s_col)
+                    if not v:
+                        continue
                     row_list.append(v)
                 else:
-                    cell = sheet.cell(row, col)
-                    row_list.append(self.converter.get_cell_value(cell))
+                    cell = sheet.cell(s_row, s_col)
+                    v = self.converter.get_cell_value(cell)
+                    if not v:
+                        continue
+                    row_list.append(v)
             if len(row_list) > 0:
                 data.append(row_list)
         return data
 
     def _gen_field_value(self, sheet, row_idx, column_desc):
-        if len(column_desc.column_indexs) == 1:
+        if not column_desc.is_array and len(column_desc.column_indexs) == 1:
             row, col = self._cell_coord_of_merged(sheet, row_idx, column_desc.column_indexs[0])
             return self.converter.get_cell_text(sheet, row, column_desc, col)
-        else:  # call it column repeat mode.
+        else:  # call it column repeat mode. treat as array
             ret = []
             for idx in column_desc.column_indexs:
                 row, col = self._cell_coord_of_merged(sheet, row_idx, idx)
@@ -118,13 +124,13 @@ class _TargetConverter(object):
         sheet = self.converter.get_workbook().sheet_by_name(sheet_desc.sheet_name)
         data = list()
         # 生成层级数据结构
-        for row_idx in range(self.converter.start_row+1, sheet.nrows):
+        for row_idx in range(sheet_desc.start_row+1, sheet.nrows):
             row_content = dict()
             for column_desc in sheet_desc.columns:
                 column_idx = column_desc.column_indexs[0]
-                if column_idx < 0 and sheet_desc.vk_generator:  # suppose to be vk
+                if column_idx < 0 and sheet_desc.vc_generator[column_desc.column_name]:  # suppose to be vk
                     row_content[column_desc.field_name] = next(
-                        sheet_desc.vk_generator)
+                        sheet_desc.vc_generator[column_desc.column_name])
                 else:
                     row_content[column_desc.field_name] = self._gen_field_value(
                         sheet, row_idx, column_desc)
@@ -200,8 +206,11 @@ class _JsonConverter(_TargetConverter):
         if type(node) == list:
             ret = self.BEGIN_ARRAY
             for v in node:
-                ret += v + self.VALUE_SEPARATOR
-            ret += self.BEGIN_ARRAY
+                if v == node[-1]:
+                    ret += v
+                else:
+                    ret += v + self.VALUE_SEPARATOR
+            ret += self.END_ARRAY
             return ret
         else:
             return node
@@ -213,7 +222,8 @@ class _JsonConverter(_TargetConverter):
                 child = node[0]
                 line = self.converter.indent * step + \
                     key_name + self.NAME_SEPARATOR + child["v"]
-                line += self.VALUE_SEPARATOR
+                if not last_one:
+                    line += self.VALUE_SEPARATOR
                 self.converter.append_line(line)
                 return
             line = self.converter.indent * step + key_name + self.NAME_SEPARATOR + self.BEGIN_OBJECT
@@ -360,17 +370,30 @@ class _LuaConverter(_TargetConverter):
             self.converter.indent * step + "}" + (_EMPTY if step == 0 else ","))
 
 class _ColumnDesc(object):
+    @staticmethod
+    def key_char(char):
+        return char == "&"
+
+    @staticmethod
+    def array_char(char):
+        return char == "*"
+
     def __init__(self, column_name, field_name, column_idx):
         first_char = field_name[0]
         last_char = field_name[-1]
-        map_table = {"?": "bool", "#": "number", "$": "string"}
-        field_name = field_name if first_char != "*" else field_name[1:]
-        field_name = field_name if last_char not in map_table else field_name[:-1]
+        self.is_key = self.key_char(first_char)
+        self.is_array = self.array_char(first_char)
+        has_prefix = self.is_array or self.is_key
+        data_type_map = {"?": "bool", "#": "number", "$": "string"}
+        self.map_type = data_type_map[last_char] if last_char in data_type_map else "raw"
+        field_name = field_name if not has_prefix else field_name[1:]
+        field_name = field_name if self.map_type == "raw" else field_name[:-1]
         self.column_name = column_name
         self.column_indexs = column_idx
-        self.is_key = first_char == "*"
         self.field_name = field_name
-        self.map_type = map_table[last_char] if last_char in map_table else "raw"
+
+    def __str__(self):
+        return "%s-%s" % (self.column_name, self.column_indexs)
 
 
 class _SheetDesc(object):
@@ -381,8 +404,8 @@ class _SheetDesc(object):
         self.maps = dict()
         self.keys = list()
         self.has_key = False
-        self.vk_generator = None
-        self.start_row = 0
+        self.vc_generator = dict()
+        self.start_row = None
         # 当数据只有一列时，可以选择性的不要name名
         self.simple_map = False
 
@@ -393,6 +416,7 @@ class _SheetDesc(object):
         if desc.is_key:
             self.keys.append(desc)
             self.has_key = True
+        return desc
 
     def find_column_desc(self, col):
         for cd in self.columns:
@@ -410,23 +434,17 @@ class _SheetDesc(object):
             while True:
                 yield str(n)
                 n += step
-        start = int(vk_param[0])
+        start = int(vk_param[0]) if len(vk_param) >= 1 else 1
         step = int(vk_param[1]) if len(vk_param) >= 2 else 1
-        self.vk_generator = ff(start, step)
+        return ff(start, step)
 
-    VK_HANDLER = {
+    VC_HANDLER = {
         "VK_INT": vk_int
     }
 
-    def set_virtual_key(self, vk_name, *vk_param):
-        desc = _ColumnDesc(vk_name, vk_name, [-1])
-        self.columns.append(desc)
-        self.maps[vk_name] = desc
-        desc.is_key = True
-        if desc.is_key:
-            self.keys.append(desc)
-            self.has_key = True
-        self.VK_HANDLER[vk_name.upper()](self, desc, vk_param)
+    def set_virtual_column(self, column_desc, vk_param):
+        vc = self.VC_HANDLER[column_desc.field_name.upper()](self, column_desc, vk_param)
+        self.vc_generator[column_desc.column_name] = vc
 
 class Converter(object):
     scope = None
@@ -438,7 +456,15 @@ class Converter(object):
     VIRTUAL_KEYS = ("VK_INT",)
 
     @staticmethod
+    def is_vc(field_name):
+        for vk in Converter.VIRTUAL_KEYS:
+            if vk in field_name.upper():
+                return True
+        return False
+
+    @staticmethod
     def to_bool(text):
+        text = str(text)
         falses = [_EMPTY, "nil", "0", "false", "no", "none", u"否", u"无", "null"]
         if not text or text.lower() in falses:
             return False
@@ -485,6 +511,7 @@ class Converter(object):
         self._meta = args.meta
         self._header_mode = args.header_mode
         self._targetConverter = self.SUPPORTED_LANGUAGE[target](self)
+        self._work_sheet = args.sheet
         self.reset()
     
     def default_null(self):
@@ -499,17 +526,26 @@ class Converter(object):
     def log_warnings(self):
         pass
 
+    def _set_work_sheet(self):
+        try:
+            if self._work_sheet:
+                sheetx = int(self._work_sheet)
+                self._work_sheet = self._sheet_names[sheetx]
+        except ValueError:
+            pass
+
     def convert(self, xls_filename, on_convert_over_callback=None, dry_run=False):
         self._meta_tables = list()
         try:
             self._workbook = xlrd.open_workbook(xls_filename)
             self._xls_filetime = os.path.getmtime(xls_filename)
-            self.xls_filename = xls_filename
+            self.xls_filename = try_decode(xls_filename)
         except:
-            print("!! Failed to load workbook, not a excel: " + xls_filename)
+            log("!! Failed to load workbook, not a excel: " + xls_filename)
             return
 
-        self._sheet_names = self._workbook.sheet_names()
+        self._sheet_names = [try_decode(x) for x in self._workbook.sheet_names()]
+        self._set_work_sheet()
         if self._meta in self._sheet_names:
             self._load_meta_sheet()
         else:
@@ -522,12 +558,12 @@ class Converter(object):
         for sheet_desc in self._meta_tables:
             self._targetConverter.convert_sheet(sheet_desc)
             self.tables.append(sheet_desc.table_name)
-            print("process sheet: [%s] over" % sheet_desc.sheet_name)
+            log("process sheet: [%s] over" % sheet_desc.sheet_name)
             self._targetConverter.on_convert_over(self.SHEET_OVER, sheet_desc.table_name)
             if callable(on_convert_over_callback):
                 on_convert_over_callback(
                     self, self.SHEET_OVER, sheet_desc.table_name)
-        print("process file: [%s] over" % xls_filename)
+        log("process file: [%s] over" % xls_filename)
         self._targetConverter.on_convert_over(self.FILE_OVER, xls_filename)
         if callable(on_convert_over_callback):
             on_convert_over_callback(self, self.FILE_OVER, xls_filename)
@@ -606,55 +642,65 @@ class Converter(object):
         sheet_desc = self._get_base_sheet_desc(text)
         sheet_name = sheet_desc.sheet_name
         data_sheet = self._workbook.sheet_by_name(sheet_name)
-        column_headers = self._parse_data_header(data_sheet)
+        column_headers, _ = self._parse_data_header(data_sheet, sheet_desc.start_row)
 
+        #column info start from 1
         for row_idx in range(1, meta_sheet.nrows):
             cell = meta_sheet.cell(row_idx, column_idx)
             if cell.ctype != xlrd.XL_CELL_TEXT or cell.value == _EMPTY:
                 continue
             text_split = cell.value.split("=")
             column_name = text_split[0]
-            if column_name not in self.VIRTUAL_KEYS:
-                field_name = text_split[1]
+            field_name = text_split[1]
+            if not self.is_vc(field_name):
                 if column_name not in column_headers:
                     raise AnyException("Meta data error, column(%s) not exist in sheet %s" % (
                         column_name, sheet_name))
                 sheet_desc.map(column_name, field_name,
                                column_headers[column_name])
             else:
-                sheet_desc.set_virtual_key(column_name, *text_split[1:])
+                column_desc = sheet_desc.map(column_name, field_name, [-1])
+                sheet_desc.set_virtual_column(column_desc, text_split[2:])
 
         if len(sheet_desc.keys) > 0 and len(sheet_desc.keys) == len(sheet_desc.columns):
             raise AnyException(
                 "Meta data error, too many keys, sheet: %s" % sheet_name)
         return True
 
-    def _parse_data_header(self, data_sheet):
+    def _parse_data_header(self, data_sheet, start_row = None):
         column_headers = dict()
-        row = self.start_row
+        column_headers_list = list()
+        row = start_row or self.start_row
         for col in range(0, data_sheet.ncols):
             cell = self.merged_cell(data_sheet, row, col)
             column_header = self.get_cell_value(cell)
             if not column_header:
                 continue
+            if column_header not in column_headers_list:
+                column_headers_list.append(column_header)
             if column_header in column_headers:
                 column_headers[column_header].append(col)
             else:
                 column_headers[column_header] = [col]
-        return column_headers
+        return column_headers, column_headers_list
 
     def _load_meta_header(self):
+        if self._work_sheet and self._work_sheet not in self._sheet_names:
+            log("No Sheet name: %s" % self._work_sheet)
+            return
         for sheet_name in self._sheet_names:
             data_sheet = self._workbook.sheet_by_name(sheet_name)
             if data_sheet.ncols == 0:
                 return
             sheet_desc = _SheetDesc(sheet_name, sheet_name)
+            sheet_desc.start_row = self.start_row or 0
             self._meta_tables.append(sheet_desc)
             if not self._header_mode:
                 continue
             
-            column_headers = self._parse_data_header(data_sheet)
-            for k, v in column_headers.items():
+            column_headers, column_headers_list = self._parse_data_header(data_sheet)
+            for k in column_headers_list:
+                v = column_headers[k]
                 sheet_desc.map(k, k, v)
 
             # 不能所有的列都是索引
@@ -682,6 +728,9 @@ class Converter(object):
             dt = xlrd.xldate.xldate_as_datetime(
                 cell.value, self._workbook.datemode)
             return "%d" % time.mktime(dt.timetuple())
+        if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+            b = self.to_bool(cell.value)
+            return self._bool_string(b)
         return try_decode(cell.value)
 
     # 该函数尽可能返回xls看上去的字面值
@@ -721,7 +770,7 @@ class Converter(object):
 def _parse_argument():
     parser = argparse.ArgumentParser(
         description="convert excel to target scripts.")
-    parser.add_argument("-s", "--scope", dest="scope",
+    parser.add_argument("-s", "--scope", dest="scope", type=str,
                         help="table scope,local,global", choices=["local", "global", "default"])
     parser.add_argument("-i", "--indent", dest="indent",
                         help="indent size, 0 for tab, default 2 (spaces)", type=int, default=INDENT_NUMBER, choices=[0, 2, 4, 8])
@@ -733,10 +782,12 @@ def _parse_argument():
                         help="is header mode, if no meta sheet, analyze sheet header.")
     parser.add_argument("-r", "--row", dest="row", action="store",
                         type=int, default=1, help="start row to process.")
-    parser.add_argument("-o", "--output", dest="output",
+    parser.add_argument("-o", "--output", dest="output", type=str,
                         help="specify a file name, if not, convert into multiple files according to meta table.")
-    parser.add_argument("-d", "--dir", dest="outdir", default=".",
+    parser.add_argument("-d", "--dir", dest="outdir", default=".", type=str,
                         help="output dir, default is current where converter is.")
+    parser.add_argument("-w", "--work-sheet", dest="sheet", required=False,
+                        help="specify a work sheet, can be sheet index or sheet name")                     
     parser.add_argument("-t", "--target", dest="target", default="json",
                         help="target language file ext", choices=["json", "lua"])
     parser.add_argument('inputs', nargs='+', help="input excel files")
@@ -753,8 +804,8 @@ def convert_all_sheet(converter, args):
         for filename in args.inputs:
             converter.convert(filename)
         converter.save(output_file)
-        print("Convert all xls file into [%s] over:" %
-              converter.target, args.output)
+        log("Convert all xls file into [%s] [%s] over:" %
+              (converter.target, args.output))
 
 def convert_by_each_sheet(converter, args):
     if args.force:
@@ -777,7 +828,7 @@ def convert_by_each_sheet(converter, args):
 def on_convert_over_callback(converter, action, name):
     if action == Converter.SHEET_OVER:
         converter.save(os.path.join(args.outdir, name))
-        print("Convert a sheet into [%s.%s] over" %
+        log("Convert a sheet into [%s.%s] over" %
                 (name, converter.target))
         converter.reset()
 

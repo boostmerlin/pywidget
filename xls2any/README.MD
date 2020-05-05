@@ -1,40 +1,54 @@
 # A tool convert xls, xlsx to other language config
 
-currently only support Lua
-TODO: json, xml
+currently support:  
 
-## Usage: 
-* 查看指定用法
-python xls2any.py -h
-* 或者运行：
-xls2any.bat  
-TODO: xls2any.sh  
-如果文件夹下包含__xlsconfig__的文件，则会把该文件夹的文件当作xls来处理  
+* json
+* lua
 
 ## 环境需求  
+
 python2.7+ or python3
 pip install xlrd  
 
-## 主要特性:
-支持多级索引转换,生成层级table  
-也支持无索引转换,按行生成数组  
-支持差量转换,只转换有变更的文件(基于文件时间比较)  
-可以跳过起始行  
-列重复模式，相同列的配置会被当作数组对待  
+## 用法
 
-对excel表格的要求,可按两种模式来填写excel表格  
+* 查看指定用法  
+python xls2any.py -h
 
-模式1:  
-需要在excel中专门建一个Sheet,其中每一列对应一个需要转换的Sheet, 运行时添加参数--meta xx 指定metasheet 名  
-第一行指定了该Sheet对应的table名,形如: "SomeSheet=SomeTable"  
-其余行表示"数据列"到lua变量的映射,形如: "SomeColumn=SomeField"  
-注意SomeField支持一些符号标记:  
-'*'开头的映射名表示它在table中用作索引,索引可以有多个,但不能所有列都是索引.  
-'#'结尾的映射名表示映射为数字.  
-'$'结尾的映射名表示映射为字符串,指明了这种格式时,在excel中填写时无需加引号.  
-'?'结尾的映射名表示映射为布尔变量,如果填的是字符串,会自动处理常见的值,比如(0, 1, 是,否...).  
-结尾不是"#$?"的,会尽可能将表格中的字面值照搬到lua中去,这时如果希望被处理为字符串的,需要在表格中自行添加引号.  
+__xls2any.bat__ or __xls2any.sh__ 实用命令,
+会搜索盘里文件夹下包含  **__xlsconfig__**的文件夹，会处理该文件夹下的xlx，之后就不再需要重复输入命令了  
+如果要删除之前的配置: `xls2any -d`  
+如果只搜索指定的文件夹: `xls2any dir_name`
 
-模式2:  
-无需在excel文件中加入额外的meta sheet,直接在列标题中标注即可; 标注格式与方式1类似.  
-添加参数--header, 并使用--row参数指定数据行的起始行数来跳过备注
+## 主要特性
+
+* 支持嵌套  
+* 支持增量转换，只转换有变更的文件（基于文件时间比较）
+* 可以跳过指定的起始行  
+* 列重复模式，相同列的配置会被当作数组对待，列重复同理  
+* 支持合并单元格处理，合并的格子会被处理成同一数据  
+* 支持合并多个单元格数据到一个文件中  
+
+## 数据格式  
+
+每列（Column）是一个字段，字段（Field）可以有一些标记：
+
+* `&` **开头**表示它在table(map)中用作索引,索引可以有多个,但不能所有列都是索引.
+* `*` **开头**表示value将会被放入数组中。默认多个重复列才会被处理成数组
+* `#` **结尾**表示映射为数字.  
+* `$` **结尾**表示映射为字符串,数据转化时会被引号括起来
+* `?` **结尾**表示映射为布尔变量,如果填的是字符串,会自动处理常见的值,比如(0, 1, 是,否...).  
+* 结尾不是"#$?"的,会按**表格数据类型**照搬
+
+1. 二维表格转化为一个二维数组，不需要指定字段标记的元数据。见test1-array_map
+
+2. 字段标记元数据和数据放在同一地方，作为表头，执行命令时需要添加参数： __--header__, 如果使用--row参数指定数据行的起始行数，则row行应包括表头元数据所在行。见test2-header_mode
+
+3. 单独使用一个sheet来表示其它表的元数据组,每列声明一个表的数据格式(见test3-meta_sheet)：
+   SheetName=data_table_name[=start_row][=simple_map?]  
+   start_row： 起始行
+   simple_map： 是否是简单映射  
+   ColumnName=vk_param_or_field_name[=vk_param]...[=vk_param]  
+   ColumnName可以是真实列名也可以是VK(virtual key), field_name 即生成的key，VK名不会写到数据里
+   目前VK有：
+   * VK_INT: 生成指定起始和步长的整数数列  
