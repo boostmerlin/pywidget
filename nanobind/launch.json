@@ -1,0 +1,30 @@
+{
+    // 在 VSCode 中调试 Python 和 C++ Extension 代码
+    // 使用 python c++ Debugger 插件
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python C++ Debug",
+            "type": "pythoncpp",
+            "request": "launch",
+            "pythonLaunchName": "Python: Current File",
+            "cppAttachName": "(Windows) Attach",
+            "cppConfig": "default (win) Attach"
+        },
+        {
+            "name": "(Windows) Attach",
+            "type": "cppvsdbg",
+            "request": "attach",
+            "processId": ""
+        },
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "C:\\Users\\bespb\\miniconda3\\Scripts\\pytest.exe",
+            "args": ["${cwd}/libpybind/tests/test_fields.py::test_fields_initialization"],
+            "console": "integratedTerminal"
+        }
+    ]
+}
