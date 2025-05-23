@@ -7,6 +7,7 @@ import time
 import fnmatch
 
 # A helper script to generate binding declarations for nanobind
+# binding function need declare in the form of `bindXX* or XX*bind`
 # bind function 调用顺序有依赖，否则会出现import失败，或者运行时候时候失败（bad cast)
 
 LIB_HEADER = '<nanobind/nanobind.h>'
@@ -328,10 +329,10 @@ def restore_backup(module_dir):
 
 
 def print_usage():
-    print('Usage: python gen_bind_declare.py <MODULE> [-a] [-b]')
+    print('Usage: python gen_bind_declare.py <MODULE> [-a] [-b] [-i]')
     print('  <MODULE>  Path to the Python module directory')
-    print('  -a        Update <MODULE>_ext.cpp file with bind function calls')
-    print('  -b        Restore <MODULE>_ext.cpp from backup file')
+    print('  -a        Update <MODULE>_ext.cpp file with All bind function calls')
+    print('  -b        Restore <MODULE>_ext.cpp from Backup file')
     print('  -i        Include files ignored by .gitignore')
 
 
